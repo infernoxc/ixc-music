@@ -19,9 +19,10 @@ From the [latest release](https://github.com/infernoxc/ixc-music/releases/latest
 ## 3. Install
 1. **Close OBS** (File › Exit).
 2. Double-click **`Install.bat`** (or run the Setup `.exe`).
-3. You should see `Helper running: YES`.
+3. You should see `IXC Core running: YES`.
 
-This installs to `%LOCALAPPDATA%\IXC-OBS`, starts automatically when you log in to Windows, and adds
+This builds IXC Core on your PC with the C# compiler built into Windows (a few seconds; the download contains source code, not a program),
+installs to `%LOCALAPPDATA%\IXC-OBS`, starts automatically when you log in to Windows, and adds
 **Start menu › IXC for OBS** (Start IXC, Stop IXC, settings, uninstall).
 Optional: `scripts\install.ps1 -AddObsDocks` also adds the dock to OBS for you (with OBS closed).
 
@@ -36,6 +37,11 @@ Optional: `scripts\install.ps1 -AddObsDocks` also adds the dock to OBS for you (
    - **Tracks:** tick the tracks that should carry music (see [USAGE.md › Audio tracks](USAGE.md#audio-tracks)).
 6. Want music in other scenes too? Right-click the source › **Copy**, then in the other scene **Paste (Reference)**.
 
+### The destination switch (ALL / TWITCH / KICK / YOUTUBE ONLY)
+1. OBS › Tools › **WebSocket Server Settings** › ✅ **Enable WebSocket server**. IXC reads the port and password from OBS's settings by itself.
+2. Keep the source name **IXC Music Player** (or set `music.routing.inputName` to your name).
+3. If your platforms don't use Twitch = track 1, Kick = track 2, YouTube = track 3, set `music.routing.tracks` ([CONFIGURATION.md](CONFIGURATION.md)).
+
 ### The dock (the control panel)
 **Docks › Custom Browser Docks...**, Dock Name `IXC Music`, URL `http://localhost:8767/music/dock.html` › **Apply**.
 Drag the new dock wherever you like.
@@ -43,5 +49,7 @@ Drag the new dock wherever you like.
 ## 5. First test
 In the IXC Music dock, type `NCS` in the search box, press Enter, then press ▶ on a result. You should hear it, and the dock shows
 "▶ playing". If it says **"Music player not connected"**, check step 4 (the source must be in the current scene).
+Then press **KICK ONLY** (or another platform): the line under the buttons should show "✓ Only Kick viewers hear the music · OBS track 2".
+In OBS › Advanced Audio Properties, the *IXC Music Player* track boxes change at the same moment.
 
 Next: [Usage](USAGE.md) · [Troubleshooting](TROUBLESHOOTING.md)

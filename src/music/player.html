@@ -12,15 +12,19 @@
 </head>
 <body>
 <div id="yt"></div>
+<script src="/core/ixc.js"></script>
 <script>
 const API = location.origin + '/api';
 const TEST_ID = new URLSearchParams(location.search).get('testid');   // standalone test: plays one video, ignores commands and saved state
 const S = { queue: [], index: -1, playing: false, volume: 40, shuffle: false, repeat: true, autoplay: true, autostart: false, history: [], lastPos: 0, title: '', pos: 0, dur: 0, note: '' };
 let resume = null;
 try { const saved = JSON.parse(localStorage.getItem('ixc_music') || '{}'); Object.assign(S, saved, { playing: false }); resume = saved._resume || null; } catch {}
-let yt = null, ready = false, since = -1, userPaused = false, autoResumes = 0, errorLock = 0, version = null;
-
-const log = (ev, data) => fetch(`${API}/log`, { method: 'POST', body: JSON.stringify({ src: TEST_ID ? 'TEST' : 'OBS', ev, i: S.index, ...(data || {}) }) }).catch(() => {});
+let yt = null, ready = false, userPaused = false, autoResumes = 0, errorLock = 0;
+// one WebSocket to IXC Core: commands arrive instantly (v1 polled every 0.5 s), state is pushed only when something changes
+const link = TEST_ID ? null : IXC.connect({ role: 'player', topics: ['music.cmd', 'reload'], on: (m) => { if (m.type === 'music.cmd' && m.c) { try { run(m.c); } catch (e) { log('cmd-error', { msg: String(e) }); } } },
+  onState: (up) => { if (up) push(); }, beforeReload: () => save({ _resume: { index: S.index, pos: ready ? yt.getCurrentTime() : 0, playing: S.playing } }) });
+const LOG_EVENTS = /^(load|yt-error|autoplay|autoplay-empty|autoplay-error|queue-end|cmd-error|match-failed|ready|autostart)$/;
+const log = (ev, data) => { if (link && LOG_EVENTS.test(ev)) link.send({ type: 'music.log', ev, info: JSON.stringify({ i: S.index, ...(data || {}) }).slice(0, 300) }); };
 if (TEST_ID) { S.queue = [{ id: TEST_ID }]; S.index = 0; S.volume = 5; resume = null; }
 const save = (extra) => { if (TEST_ID) return; try { localStorage.setItem('ixc_music', JSON.stringify(Object.assign({ queue: S.queue, index: S.index, volume: S.volume, shuffle: S.shuffle, repeat: S.repeat,
   autoplay: S.autoplay, autostart: S.autostart, history: S.history.slice(-40), lastPos: S.lastPos }, extra || {}))); } catch {} };
@@ -44,9 +48,16 @@ async function autoFill() {
 const cur = () => S.queue[S.index];
 const playable = (i) => S.queue[i] && !S.queue[i].bad;
 
+// Spotify songs are queued by name and matched to a YouTube video only when their turn comes (keeps big playlists cheap)
+async function matchItem(it) {
+  try { const r = await (await fetch(`${API}/music/match?q=${encodeURIComponent(it.q)}&ms=${it.ms || 0}`, { cache: 'no-store' })).json(); if (r.ok) { it.id = r.id; return true; } } catch (e) {}
+  it.bad = true; it.why = 'no match found on YouTube'; log('match-failed', { q: it.q }); return false;
+}
 function load(i, autoplay = true, startAt = 0) {
   if (!ready || !S.queue.length) return;
   S.index = ((i % S.queue.length) + S.queue.length) % S.queue.length; const it = cur(); S.title = it.title || ''; S.note = '';
+  if (!it.id && !it.list && it.q) { const want = S.index; S.note = 'Finding "' + (it.title || it.q) + '" on YouTube…'; push();
+    matchItem(it).then(ok => { if (S.index !== want) return; if (ok) load(want, autoplay, startAt); else { S.note = `Skipped: ${it.title} (${it.why})`; save(); push(); next('error'); } }); return; }
   userPaused = !autoplay; autoResumes = 0; errorLock = 0; S.lastPos = startAt;
   if (it.id) { S.history = S.history.filter(h => h !== it.id); S.history.push(it.id); if (S.history.length > 40) S.history.shift(); }
   save();
@@ -90,6 +101,11 @@ function run(c) {
       if (c.cmd === 'add') { S.queue.push(it); if (S.index < 0 || (!S.playing && !userPaused && (S.note === 'End of queue' || S.note.startsWith('Autoplay')))) { autoChain = 0; load(S.queue.length - 1); } }
       else { const at = S.index < 0 ? 0 : S.index + 1; S.queue.splice(at, 0, it); if (c.cmd === 'playnow') load(at); }
       break; }
+    case 'addmany': {   // Spotify album / playlist: songs matched on YouTube one by one as they come up
+      const items = (c.items || []).filter(x => x && (x.id || x.q)).map(x => ({ id: x.id, q: x.q, title: x.title, ms: x.ms, from: x.from })); if (!items.length) break;
+      const first = S.queue.length; S.queue.push(...items);
+      if (c.play || S.index < 0 || (!S.playing && !userPaused && (S.note === 'End of queue' || S.note.startsWith('Autoplay')))) { autoChain = 0; load(first); }
+      break; }
     case 'play': userPaused = false; if (!cur()) { if (S.queue.length) load(0); } else if (cur().bad) next('play'); else yt.playVideo(); break;
     case 'pause': userPaused = true; yt.pauseVideo(); break;
     case 'toggle': if (S.playing) { userPaused = true; yt.pauseVideo(); } else run({ cmd: 'play' }); break;
@@ -113,25 +129,17 @@ function run(c) {
   }
   save(); push();
 }
-async function poll() {
-  try { const d = await (await fetch(`${API}/cmds?since=${Math.max(0, since)}`, { cache: 'no-store' })).json();
-    if (since < 0 || d.seq < since) since = d.seq;                 // first poll, or the helper restarted: ignore old commands
-    else { for (const c of d.cmds || []) { try { run(c); } catch (e) { log('cmd-error', { msg: String(e) }); } } since = d.seq; } } catch (e) {}
-  setTimeout(poll, 500);
-}
+// state -> IXC Core (-> docks, phones). Sent on every change; while playing also every 5 s so the progress bar stays true
+// (docks move the bar smoothly on their own in between). v1 posted the full state every 1.5 s even when nothing happened.
+let pushT = null;
 function push() {
-  if (TEST_ID) return;
-  try { if (ready) { S.pos = yt.getCurrentTime() || 0; S.dur = yt.getDuration() || 0; const vd = yt.getVideoData && yt.getVideoData(); const it = cur();
-      if (vd && vd.title) { S.title = vd.title; if (it && !it.list && it.title !== vd.title) { it.title = vd.title; save(); } }
-      if (S.playing && Math.abs(S.pos - S.lastPos) >= 5) { S.lastPos = Math.floor(S.pos); save(); } } } catch (e) {}   // remember the position (Auto-start resumes here)
-  fetch(`${API}/state`, { method: 'POST', body: JSON.stringify(Object.assign({ t: Date.now(), ready }, S)) }).catch(() => {});
+  if (TEST_ID || !link) return; if (pushT) return; pushT = setTimeout(() => { pushT = null;   // several changes in one moment = one message
+    try { if (ready) { S.pos = yt.getCurrentTime() || 0; S.dur = yt.getDuration() || 0; const vd = yt.getVideoData && yt.getVideoData(); const it = cur();
+        if (vd && vd.title) { S.title = vd.title; if (it && !it.list && it.title !== vd.title) { it.title = vd.title; save(); } }
+        if (S.playing && Math.abs(S.pos - S.lastPos) >= 5) { S.lastPos = Math.floor(S.pos); save(); } } } catch (e) {}   // remember the position (Auto-start resumes here)
+    link.send({ type: 'music.state', s: Object.assign({ t: Date.now(), ready }, S) }); }, 60);
 }
-setInterval(push, 1500);
-
-// self-update: reload when the player file changes, keeping the song + position
-setInterval(async () => { try { const v = (await (await fetch(`${API}/version`, { cache: 'no-store' })).json()).v;
-  if (version && v !== version) { save({ _resume: { index: S.index, pos: ready ? yt.getCurrentTime() : 0, playing: S.playing } }); log('self-update'); location.reload(); }
-  version = v; } catch (e) {} }, 5000);
+setInterval(() => { if (S.playing) push(); }, 5000);
 
 const NAMES = { '-1': 'unstarted', 0: 'ended', 1: 'playing', 2: 'paused', 3: 'buffering', 5: 'cued' };
 window.onYouTubeIframeAPIReady = () => {
@@ -158,7 +166,6 @@ window.onYouTubeIframeAPIReady = () => {
     } });
 };
 const tag = document.createElement('script'); tag.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(tag);
-if (!TEST_ID) poll();
 </script>
 </body>
 </html>

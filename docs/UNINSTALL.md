@@ -4,8 +4,11 @@
 1. Download the new release (ZIP or Setup `.exe`).
 2. Close OBS, then run `Install.bat` or the Setup `.exe` again.
 
-Your `config.json`, queue and dock settings are kept. The player page reloads itself when its files change.
+Your `config.json` (a backup is saved next to it), queue and dock settings are kept. IXC Core is rebuilt, and the player page reloads itself.
 Check your version in `%LOCALAPPDATA%\IXC-OBS\app\music\VERSION`.
+
+**From v1.x to v2:** the OBS URLs stay the same. For the new destination switch, enable OBS's WebSocket server and keep the source name
+**IXC Music Player** (see [INSTALL.md](INSTALL.md#the-destination-switch-all--twitch--kick--youtube-only)).
 
 ## Uninstall
 1. **Close OBS**, so the dock can be removed from OBS's settings.
@@ -14,6 +17,6 @@ Check your version in `%LOCALAPPDATA%\IXC-OBS\app\music\VERSION`.
 3. In OBS, delete the **IXC Music Player** source from your scenes.
 
 What gets removed: the IXC Music files, its Start menu entry and its OBS dock. If [IXC ChatBox](https://github.com/infernoxc/ixc-chatbox)
-is also installed, the shared helper, login task and settings stay for ChatBox. Otherwise everything in `%LOCALAPPDATA%\IXC-OBS`,
-the login task and the Start menu folder are removed too.
+is also installed, IXC Core, the login task and your settings stay for ChatBox. Otherwise everything in `%LOCALAPPDATA%\IXC-OBS`
+(including the downloaded `cloudflared.exe`), the login task and the Start menu folder are removed too.
 If you used the `.exe`, you can also uninstall from **Settings › Apps**.

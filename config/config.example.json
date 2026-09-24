@@ -1,7 +1,45 @@
 {
-    "_readme":  "IXC settings. The installer copies this to %LOCALAPPDATA%\\IXC-OBS\\config.json - edit THAT copy, then restart IXC (Start menu \u003e IXC for OBS \u003e Stop, then Start). Never commit your real config.json.",
-    "version":  "1.0.0",
+    "_readme":  "IXC settings. The installer copies this to %LOCALAPPDATA%\\IXC-OBS\\config.json - edit THAT copy, then restart IXC (Start menu \u003e IXC for OBS \u003e Stop IXC, then Start IXC). Never share your real config.json. All options: docs/CONFIGURATION.md",
+    "version":  "2.0.0",
     "helper":  {
                    "port":  8767
+               },
+    "diagnostics":  {
+                        "enabled":  true,
+                        "verboseLog":  false
+                    },
+    "obs":  {
+                "websocketUrl":  "auto",
+                "password":  ""
+            },
+    "music":  {
+                  "routing":  {
+                                  "mode":  "all",
+                                  "inputName":  "IXC Music Player",
+                                  "tracks":  {
+                                                 "twitch":  [
+                                                                1
+                                                            ],
+                                                 "kick":  [
+                                                              2
+                                                          ],
+                                                 "youtube":  [
+                                                                 3
+                                                             ]
+                                             }
+                              },
+                  "spotify":  {
+                                  "clientId":  "",
+                                  "clientSecret":  ""
+                              },
+                  "youtubeApiKey":  ""
+              },
+    "remote":  {
+                   "enabled":  true,
+                   "port":  8769,
+                   "sessionHours":  12,
+                   "idleMinutes":  30,
+                   "allowDownload":  true,
+                   "cloudflaredPath":  ""
                }
 }
