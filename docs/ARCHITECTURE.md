@@ -1,37 +1,48 @@
 # Architecture
 
 ```
-OBS Studio                                   your PC                                    internet
-┌──────────────────────────────┐  HTTP  ┌───────────────────────────────┐
-│ Dock "IXC Music"             │ ─────▶ │ IXC Helper  localhost:8767     │ ──▶ youtube.com (search, related songs)
-│   /music/dock.html           │ ◀───── │  src/helper/ixc-helper.ps1     │
-│ Browser source               │ ─────▶ │  - serves /music/*             │
-│   "IXC Music Player"         │ ◀───── │  - command queue dock→player   │
-│   /music/player.html ────────┼────────┼──- state player→dock          │ ──▶ YouTube IFrame player (in OBS)
-└──────────────────────────────┘        └───────────────────────────────┘
+OBS Studio                                 your PC                                          internet
+┌──────────────────────────────┐ one WS ┌─────────────────────────────────────┐
+│ Dock "IXC Music"             │ ◀────▶ │ IXC Core  localhost:8767             │ ──▶ YouTube oEmbed / search / "up next"
+│   /music/dock.html           │        │  src/core/*.cs  (ixc-core.exe)        │ ──▶ Spotify oEmbed (+ Web API with your keys)
+│ Browser source               │ ◀────▶ │  commands dock → player (push)        │
+│   "IXC Music Player"         │        │  state player → docks/phones (push)   │
+│   /music/player.html ────────┼──▶ YouTube IFrame player                     │
+└───────────▲──────────────────┘        │  obs-websocket client ───────────────┼──▶ OBS :4455 (SetInputAudioTracks)
+            └─────────── audio tracks ◀─┘  phone remote 127.0.0.1:8769 ◀── Cloudflare tunnel ◀── phone
 ```
+
+**IXC Core** is one small native program (C# 5 on .NET Framework 4.8), built on your PC by `src/core/build-core.ps1` with the compiler
+that ships with Windows. It replaces the v1 PowerShell helper. Each page keeps one WebSocket, and updates are pushed, so nothing polls.
 
 | File | Role |
 |---|---|
-| `src/helper/ixc-helper.ps1` | Windows PowerShell 5.1 `HttpListener` on localhost. Serves the pages, relays commands and state, and scrapes YouTube search and related songs (no API key). Shared with [IXC ChatBox](https://github.com/infernoxc/ixc-chatbox), which is why it also contains TTS endpoints. |
-| `src/helper/edge-tts.ps1` | Used only by IXC ChatBox's text-to-speech. Harmless when unused. |
-| `src/music/player.html` | YouTube IFrame player. Polls commands every 0.5 s, pushes its state every 1.5 s, and handles autoplay, resume, error skipping and self-reload when its file changes. Stores the queue in the OBS browser's `localStorage`. |
-| `src/music/dock.html` | Search, queue and controls. Polls `/api/state` every second. |
-| `src/start.ps1` / `stop.ps1` | Start and stop the helper (hidden); run at login by the "IXC for OBS" task. |
+| `src/core/Core.cs` | HTTP server, WebSocket hub, config, diagnostics, file serving (no path escapes) |
+| `src/core/Links.cs` | Reconnecting obs-websocket 5 client (authenticated) and the Streamer.bot client (used by ChatBox) |
+| `src/core/Music.cs` | Command/state relay, YouTube search and related songs, link checks (YouTube + Spotify), audio destination |
+| `src/core/Remote.cs` | Phone remote: cloudflared tunnel, one-time pairing, sessions |
+| `src/core/Chat.cs`, `Tts.cs` | IXC ChatBox features (inactive when only IXC Music is installed) |
+| `src/core/web/` | `ixc.js` (page ↔ core link), `phone.js` (QR dialog), `mobile.html` (phone UI), `diag.html` |
+| `src/music/player.html` | YouTube IFrame player: queue, autoplay, resume, error skipping; matches Spotify songs on YouTube when their turn comes |
+| `src/music/dock.html` | Search, links, queue, controls, destination switch |
 
-## HTTP API (`http://localhost:8767`)
+## Audio destination
+`music.route {mode}` → `SetInputAudioTracks` on the source named `music.routing.inputName` (only tracks listed in `music.routing.tracks`)
+→ `GetInputAudioTracks` to verify → result to every dock and phone. IXC also listens for OBS's `InputAudioTracksChanged` event
+(manual changes) and re-applies the saved mode when OBS (re)connects or the source is created or renamed.
+
+## HTTP API (`http://localhost:8767`, requests from other websites are refused)
 | Method & path | Notes |
 |---|---|
-| `POST /api/cmd` | Dock → player command JSON: `add{url or item}`, `playnow`, `playnext`, `play`, `pause`, `toggle`, `next`, `prev`, `jump{i}`, `remove{i}`, `move{from,to}`, `clear`, `volume{v}`, `shuffle{on}`, `repeat{on}`, `autoplay{on}`, `autostart{on}`, `seek{t}` |
-| `GET /api/cmds?since=N` | `{"seq":N,"cmds":[...]}` polled by the player |
-| `POST /api/state`, `GET /api/state` | Player state (queue, index, playing, volume, flags, title, position) |
-| `GET /api/search?q=` | Up to 15 `{id,title,length,channel}` |
-| `GET /api/related?id=&exclude=` | Up to 8 `{id,title,length}` (music-looking titles first) |
-| `GET /api/version` | Newest page file time. The player reloads when it changes and keeps the song and position. |
-| `GET` / `POST /api/log`, `GET /api/ping`, `GET /api/stats` | Diagnostics |
+| `POST /api/cmd` | Dock → player command: `add{url or item}`, `addmany{items}`, `playnow`, `playnext`, `play`, `pause`, `toggle`, `next`, `prev`, `jump{i}`, `remove{i}`, `move{from,to}`, `clear`, `volume{v}`, `shuffle{on}`, `repeat{on}`, `autoplay{on}`, `autostart{on}`, `seek{t}` |
+| `GET /api/music/resolve?url=` | Checks a link or search words → `{ok, kind, title, item | items, duplicate, note}` or `{ok:false, code, error}` |
+| `POST /api/music/add {url, mode, force}` | Resolve + queue (`mode`: `add`, `playnow`, `playnext`) |
+| `GET /api/music/match?q=&ms=` | Best YouTube match for a song name (used for Spotify songs) |
+| `GET` / `POST /api/music/route {mode}` | Audio destination |
+| `GET /api/search?q=` · `GET /api/related?id=&exclude=` | YouTube search · similar songs |
+| `GET /api/state` · `GET /api/cmds?since=N` · `GET /api/ping` · `GET /api/diag` | v1-compatible state and command APIs, status, diagnostics |
 
-**Security:** the helper binds to `localhost` only. `/api/*` rejects requests whose `Origin` header isn't `null`,
-`http://localhost:*` or `http://127.0.0.1:*` (so websites in your browser can't control it). Files are served only from the
-app folders, with path traversal blocked.
+WebSocket `/ws`: send `{"type":"hello","role":"musicdock","topics":["music.state"]}`. Messages: `music.cmd {c}`, `music.add {url, mode}`,
+`music.search {q}`, `music.route {mode}`. The player sends `music.state {s}` (on every change, and every 5 s while playing).
 
-**Data:** `%LOCALAPPDATA%\IXC-OBS\` holds `app\`, `config.json` and `helper.log`. The queue lives in OBS's browser storage.
+**Data:** `%LOCALAPPDATA%\IXC-OBS\` holds `app\`, `config.json` and `ixc-core.log`. The queue lives in OBS's browser storage.
