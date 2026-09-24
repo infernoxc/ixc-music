@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<!-- Part of IXC Music - https://github.com/infernoxc/ixc-music
+     Copyright (c) 2026 Ishan (InFerNoxC) - MIT License -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IXC Music - Player</title>
+<!-- OBS browser source: http://localhost:8767/music/player.html  (320x180, "Control audio via OBS" ON; route it to the audio track(s) you want)
+     Controlled from the IXC Music dock (dock.html). Plays YouTube videos / playlists through the official YouTube IFrame player - nothing is downloaded.
+     Reloads itself when this file is updated (keeps the song and position). -->
+<style>html,body{margin:0;background:transparent;overflow:hidden}#yt{width:320px;height:180px;opacity:0}</style>
+</head>
+<body>
+<div id="yt"></div>
+<script>
+const API = location.origin + '/api';
+const TEST_ID = new URLSearchParams(location.search).get('testid');   // standalone test: plays one video, ignores commands and saved state
+const S = { queue: [], index: -1, playing: false, volume: 40, shuffle: false, repeat: true, autoplay: true, autostart: false, history: [], lastPos: 0, title: '', pos: 0, dur: 0, note: '' };
+let resume = null;
+try { const saved = JSON.parse(localStorage.getItem('ixc_music') || '{}'); Object.assign(S, saved, { playing: false }); resume = saved._resume || null; } catch {}
+let yt = null, ready = false, since = -1, userPaused = false, autoResumes = 0, errorLock = 0, version = null;
+
+const log = (ev, data) => fetch(`${API}/log`, { method: 'POST', body: JSON.stringify({ src: TEST_ID ? 'TEST' : 'OBS', ev, i: S.index, ...(data || {}) }) }).catch(() => {});
+if (TEST_ID) { S.queue = [{ id: TEST_ID }]; S.index = 0; S.volume = 5; resume = null; }
+const save = (extra) => { if (TEST_ID) return; try { localStorage.setItem('ixc_music', JSON.stringify(Object.assign({ queue: S.queue, index: S.index, volume: S.volume, shuffle: S.shuffle, repeat: S.repeat,
+  autoplay: S.autoplay, autostart: S.autostart, history: S.history.slice(-40), lastPos: S.lastPos }, extra || {}))); } catch {} };
+let autoBusy = false, autoChain = 0;   // autoChain: autoplay rounds in a row with no song actually playing (stops runaway loops)
+// Autoplay: queue ran out -> add songs similar to the last one (YouTube "up next"), skipping anything already played or queued
+async function autoFill() {
+  if (autoBusy) return false; if (autoChain >= 3) { S.note = 'Autoplay: similar songs would not play - add a song'; return false; } autoBusy = true; autoChain++; S.note = 'Autoplay: finding similar songs…'; push();
+  try {
+    let seed = null; for (let k = S.index; k >= 0 && !seed; k--) { const it = S.queue[k]; if (it && it.id && !it.bad) seed = it.id; }
+    if (!seed) seed = S.history[S.history.length - 1];
+    if (!seed) { S.note = 'Autoplay: nothing to base it on'; return false; }
+    const exclude = [...new Set([...S.history, ...S.queue.map(q => q.id).filter(Boolean)])].slice(-60).join(',');
+    const rel = await (await fetch(`${API}/related?id=${seed}&exclude=${exclude}`, { cache: 'no-store' })).json();
+    if (!Array.isArray(rel) || !rel.length) { S.note = 'Autoplay: no similar songs found'; log('autoplay-empty', { seed }); return false; }
+    const first = S.queue.length; rel.slice(0, 3).forEach(r => S.queue.push({ id: r.id, title: r.title, auto: true }));
+    while (S.queue.length > 60 && S.index > 0) { S.queue.shift(); S.index--; }            // keep the queue from growing forever
+    log('autoplay', { seed, added: Math.min(3, rel.length) }); S.note = ''; load(Math.min(first, S.queue.length - Math.min(3, rel.length))); return true;
+  } catch (e) { S.note = 'Autoplay: could not reach YouTube'; log('autoplay-error', { msg: String(e) }); return false; }
+  finally { autoBusy = false; save(); push(); }
+}
+const cur = () => S.queue[S.index];
+const playable = (i) => S.queue[i] && !S.queue[i].bad;
+
+function load(i, autoplay = true, startAt = 0) {
+  if (!ready || !S.queue.length) return;
+  S.index = ((i % S.queue.length) + S.queue.length) % S.queue.length; const it = cur(); S.title = it.title || ''; S.note = '';
+  userPaused = !autoplay; autoResumes = 0; errorLock = 0; S.lastPos = startAt;
+  if (it.id) { S.history = S.history.filter(h => h !== it.id); S.history.push(it.id); if (S.history.length > 40) S.history.shift(); }
+  save();
+  if (it.list) yt.loadPlaylist({ listType: 'playlist', list: it.list, index: 0, startSeconds: startAt });
+  else if (autoplay) yt.loadVideoById({ videoId: it.id, startSeconds: startAt }); else yt.cueVideoById({ videoId: it.id, startSeconds: startAt });
+  yt.setVolume(S.volume); if (it.list) yt.setShuffle(S.shuffle);
+  log('load', { id: it.id || it.list, autoplay });
+}
+// next playable song; only wraps to the start when Repeat is on; returns false when there is nothing left
+function next(reason) {
+  const it = cur();
+  if (it && it.list && reason !== 'error') { const pl = yt.getPlaylist() || [], pi = yt.getPlaylistIndex(); if (pi >= 0 && pi < pl.length - 1) { yt.nextVideo(); return true; } }
+  const n = S.queue.length; if (!n) return false;
+  if (S.shuffle && n > 1) { const ok = S.queue.map((_, k) => k).filter(k => k !== S.index && playable(k)); if (ok.length) { load(ok[Math.floor(Math.random() * ok.length)]); return true; } }
+  const wrap = S.repeat && !(S.autoplay && reason !== 'user');                      // Autoplay beats Repeat when the queue runs out on its own
+  for (let step = 1; step <= n; step++) { const k = S.index + step; if (k >= n && !wrap) break; if (playable(k % n)) { load(k % n); return true; } }
+  if (S.autoplay) { autoFill().then(ok => { if (!ok && S.repeat && S.queue.some((_, k) => playable(k))) load(S.queue.findIndex((_, k) => playable(k))); }); return true; }
+  yt.stopVideo(); S.playing = false; S.note = 'End of queue'; log('queue-end', { reason }); return false;
+}
+function prev() {
+  const it = cur(); if (it && it.list && yt.getPlaylistIndex() > 0) { yt.previousVideo(); return; }
+  if (yt.getCurrentTime() > 5) { yt.seekTo(0, true); return; }
+  for (let step = 1; step < S.queue.length; step++) { const k = S.index - step; if (k < 0 && !S.repeat) break; const kk = (k + S.queue.length) % S.queue.length; if (playable(kk)) { load(kk); return; } }
+  yt.seekTo(0, true);
+}
+function parseLink(s) {
+  s = String(s || '').trim(); let m;
+  const list = (m = s.match(/[?&]list=([\w-]+)/)) ? m[1] : null;
+  const id = (m = s.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([\w-]{11})/)) ? m[1] : (/^[\w-]{11}$/.test(s) ? s : null);
+  const realList = list && !/^(RD|UL|LL|WL)/.test(list);            // RD = YouTube "mix" radio: not a playable list
+  if (realList) return id ? { list, id } : { list };
+  return id ? { id } : null;
+}
+function run(c) {
+  log('cmd', { cmd: c.cmd });
+  switch (c.cmd) {
+    case 'add': case 'playnow': case 'playnext': {
+      const it = c.item ? Object.assign({}, c.item) : parseLink(c.url); if (!it) { S.note = 'Not a YouTube link'; break; } if (c.title) it.title = c.title;
+      const dup = S.queue.findIndex(q => (q.id && q.id === it.id && !q.list && !it.list) || (q.list && q.list === it.list));
+      if (c.cmd === 'playnow' && dup >= 0) { load(dup); break; }                                    // already queued: just play it
+      if (c.cmd === 'add') { S.queue.push(it); if (S.index < 0 || (!S.playing && !userPaused && (S.note === 'End of queue' || S.note.startsWith('Autoplay')))) { autoChain = 0; load(S.queue.length - 1); } }
+      else { const at = S.index < 0 ? 0 : S.index + 1; S.queue.splice(at, 0, it); if (c.cmd === 'playnow') load(at); }
+      break; }
+    case 'play': userPaused = false; if (!cur()) { if (S.queue.length) load(0); } else if (cur().bad) next('play'); else yt.playVideo(); break;
+    case 'pause': userPaused = true; yt.pauseVideo(); break;
+    case 'toggle': if (S.playing) { userPaused = true; yt.pauseVideo(); } else run({ cmd: 'play' }); break;
+    case 'next': next('user'); break;
+    case 'prev': prev(); break;
+    case 'jump': { const i = +c.i; if (!S.queue[i]) break;
+      if (i === S.index && !S.queue[i].bad && [YT.PlayerState.PLAYING, YT.PlayerState.BUFFERING, YT.PlayerState.PAUSED].includes(yt.getPlayerState())) { userPaused = false; yt.playVideo(); break; }   // ▶ on the current song = resume, never restart
+      S.queue[i].bad = false; load(i); break; }
+    case 'remove': { const i = +c.i; if (i < 0 || i >= S.queue.length) break; const wasCur = i === S.index; S.queue.splice(i, 1);
+      if (wasCur) { if (S.queue.length) { S.index = Math.min(i, S.queue.length) - 1; if (!next('remove')) S.index = -1; } else { S.index = -1; yt.stopVideo(); S.title = ''; } }
+      else if (i < S.index) S.index--; break; }
+    case 'move': { const f = +c.from, t = +c.to; if (!S.queue[f] || t < 0 || t >= S.queue.length) break; const [it] = S.queue.splice(f, 1); S.queue.splice(t, 0, it);
+      if (S.index === f) S.index = t; else if (f < S.index && t >= S.index) S.index--; else if (f > S.index && t <= S.index) S.index++; break; }
+    case 'clear': S.queue = []; S.index = -1; yt.stopVideo(); S.title = ''; S.note = ''; break;
+    case 'volume': S.volume = Math.max(0, Math.min(100, +c.v)); yt.setVolume(S.volume); break;
+    case 'shuffle': S.shuffle = !!c.on; if (cur() && cur().list) yt.setShuffle(S.shuffle); break;
+    case 'repeat': S.repeat = !!c.on; break;
+    case 'autoplay': S.autoplay = !!c.on; break;
+    case 'autostart': S.autostart = !!c.on; break;
+    case 'seek': yt.seekTo(+c.t, true); break;
+  }
+  save(); push();
+}
+async function poll() {
+  try { const d = await (await fetch(`${API}/cmds?since=${Math.max(0, since)}`, { cache: 'no-store' })).json();
+    if (since < 0 || d.seq < since) since = d.seq;                 // first poll, or the helper restarted: ignore old commands
+    else { for (const c of d.cmds || []) { try { run(c); } catch (e) { log('cmd-error', { msg: String(e) }); } } since = d.seq; } } catch (e) {}
+  setTimeout(poll, 500);
+}
+function push() {
+  if (TEST_ID) return;
+  try { if (ready) { S.pos = yt.getCurrentTime() || 0; S.dur = yt.getDuration() || 0; const vd = yt.getVideoData && yt.getVideoData(); const it = cur();
+      if (vd && vd.title) { S.title = vd.title; if (it && !it.list && it.title !== vd.title) { it.title = vd.title; save(); } }
+      if (S.playing && Math.abs(S.pos - S.lastPos) >= 5) { S.lastPos = Math.floor(S.pos); save(); } } } catch (e) {}   // remember the position (Auto-start resumes here)
+  fetch(`${API}/state`, { method: 'POST', body: JSON.stringify(Object.assign({ t: Date.now(), ready }, S)) }).catch(() => {});
+}
+setInterval(push, 1500);
+
+// self-update: reload when the player file changes, keeping the song + position
+setInterval(async () => { try { const v = (await (await fetch(`${API}/version`, { cache: 'no-store' })).json()).v;
+  if (version && v !== version) { save({ _resume: { index: S.index, pos: ready ? yt.getCurrentTime() : 0, playing: S.playing } }); log('self-update'); location.reload(); }
+  version = v; } catch (e) {} }, 5000);
+
+const NAMES = { '-1': 'unstarted', 0: 'ended', 1: 'playing', 2: 'paused', 3: 'buffering', 5: 'cued' };
+window.onYouTubeIframeAPIReady = () => {
+  yt = new YT.Player('yt', { width: 320, height: 180, playerVars: { autoplay: 0, controls: 0, disablekb: 1, playsinline: 1, rel: 0, iv_load_policy: 3, fs: 0 },
+    events: {
+      onReady: () => { ready = true; yt.setVolume(S.volume); log('ready');
+        if (TEST_ID) { load(0, true); return; }
+        if (resume && S.queue[resume.index]) { load(resume.index, !!resume.playing, Math.floor(resume.pos || 0)); }
+        else if (cur() && S.autostart) { log('autostart', { pos: S.lastPos }); load(S.index, true, Math.floor(S.lastPos || 0)); }   // Auto-start with OBS: resume where it stopped
+        else if (cur()) load(S.index, false, Math.floor(S.lastPos || 0));
+        save(); push(); },
+      onStateChange: (e) => {
+        const st = e.data; S.playing = st === YT.PlayerState.PLAYING; log('state', { s: NAMES[st] ?? st, t: Math.round(yt.getCurrentTime() || 0) });
+        if (st === YT.PlayerState.PLAYING) { S.note = ''; errorLock = 0; autoChain = 0; }
+        if (st === YT.PlayerState.ENDED) next('ended');
+        if (st === YT.PlayerState.PAUSED && !userPaused && autoResumes < 3) {       // pause nobody asked for (buffer hiccup / YouTube): resume it
+          autoResumes++; setTimeout(() => { if (!userPaused && yt.getPlayerState() === YT.PlayerState.PAUSED) { log('auto-resume', { n: autoResumes }); yt.playVideo(); } }, 1200); }
+        push(); },
+      onError: (e) => {                                    // 2 bad id, 5 html5, 100 removed/private, 101/150 owner blocks outside playback
+        const it = cur(); log('yt-error', { code: e.data, id: it && (it.id || it.list) });
+        if (errorLock++) return;                           // one skip per song, never a chain
+        if (it) { it.bad = true; it.why = (e.data === 101 || e.data === 150) ? 'blocked by the owner outside YouTube' : (e.data === 100 ? 'removed or private' : 'could not play'); }
+        S.note = `Skipped: ${(it && it.title) || 'song'} (${it && it.why})`; save(); setTimeout(() => next('error'), 700); push(); }
+    } });
+};
+const tag = document.createElement('script'); tag.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(tag);
+if (!TEST_ID) poll();
+</script>
+</body>
+</html>

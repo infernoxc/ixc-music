@@ -1,0 +1,7 @@
+{
+    "_readme":  "IXC settings. The installer copies this to %LOCALAPPDATA%\\IXC-OBS\\config.json - edit THAT copy, then restart IXC (Start menu \u003e IXC for OBS \u003e Stop, then Start). Never commit your real config.json.",
+    "version":  "1.0.0",
+    "helper":  {
+                   "port":  8767
+               }
+}

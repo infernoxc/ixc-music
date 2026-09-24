@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<!-- Part of IXC Music - https://github.com/infernoxc/ixc-music
+     Copyright (c) 2026 Ishan (InFerNoxC) - MIT License -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IXC Music</title>
+<!-- OBS custom browser dock: http://localhost:8767/music/dock.html   Controls player.html (the "IXC Music Player" browser source). -->
+<style>
+  :root { --red: #e3141e; --bg: #0f0e13; --card: #17161c; --line: #2a2830; --dim: #9b98a4; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: #eeedf2; font: 13px "Bahnschrift", "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 8px 10px 6px; border-bottom: 2px solid var(--red); background: #16161b; }
+  .row { display: flex; gap: 6px; align-items: center; }
+  input[type=text] { flex: 1; min-width: 0; background: #0c0b10; border: 1px solid var(--line); color: #fff; border-radius: 7px; padding: 6px 8px; font: inherit; }
+  button { background: #1f1e25; border: 1px solid #34323c; color: #e8e7ec; border-radius: 7px; padding: 5px 9px; font: 600 12px "Bahnschrift", sans-serif; cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: #55525e; } button.red { background: var(--red); border-color: var(--red); color: #fff; } button.on { background: var(--red); border-color: var(--red); }
+  #now { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+  #now img { width: 64px; height: 36px; object-fit: cover; border-radius: 4px; background: #000; flex: none; }
+  #nowT { font-weight: 600; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  #nowS { color: var(--dim); font-size: 11px; margin-top: 2px; }
+  #bar { height: 3px; background: #2a2830; border-radius: 2px; margin-top: 6px; overflow: hidden; } #bar i { display: block; height: 100%; width: 0; background: var(--red); }
+  .ctrl { margin-top: 7px; } .ctrl input[type=range] { flex: 1; accent-color: var(--red); }
+  #tabs { display: flex; gap: 4px; padding: 6px 10px 0; } #tabs button { flex: 1; } #tabs button.sel { background: #2a2830; border-color: #55525e; }
+  main { flex: 1; overflow-y: auto; padding: 6px 8px 10px; }
+  main::-webkit-scrollbar { width: 6px; } main::-webkit-scrollbar-thumb { background: #3a3842; border-radius: 3px; }
+  .it { display: flex; gap: 8px; align-items: center; padding: 5px; border-radius: 7px; background: var(--card); margin-top: 5px; border: 1px solid transparent; }
+  .it.cur { border-color: var(--red); } .it img { width: 56px; height: 32px; object-fit: cover; border-radius: 4px; flex: none; background: #000; }
+  .it .t { flex: 1; min-width: 0; } .it .t b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .it .t small { color: var(--dim); } .it button { padding: 3px 7px; }
+  #status { padding: 3px 10px; font-size: 11px; color: #ffb4b4; background: #3a0f12; display: none; } #status.show { display: block; }
+  .hint { color: var(--dim); padding: 10px 4px; line-height: 1.4; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row"><input id="q" type="text" placeholder="Search YouTube, or paste a video / playlist link"><button id="go" class="red">Search</button></div>
+  <div id="now"><img id="nowI" alt=""><div style="min-width:0;flex:1"><div id="nowT">Nothing playing</div><div id="nowS">plays through the "IXC Music Player" source in OBS</div></div></div>
+  <div id="bar"><i></i></div>
+  <div class="row ctrl"><button id="prev" title="Previous">&#9198;</button><button id="toggle" title="Play / pause">&#9199;</button><button id="next" title="Next">&#9197;</button>
+    <button id="shuf" title="Shuffle">&#128256;</button><button id="rep" title="Repeat the queue">&#128257;</button><button id="auto" title="Autoplay: when the queue ends, keep playing similar songs">Autoplay</button><span>&#128266;</span><input id="vol" type="range" min="0" max="100" value="40"></div>
+  <div class="row" style="margin-top:6px;font-size:11px;color:var(--dim)"><label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input id="astart" type="checkbox" style="accent-color:var(--red)"> Start music by itself when OBS opens (resumes the last song)</label></div>
+  <div id="note" style="display:none;margin-top:6px;font-size:11px;color:#ffcf6b"></div>
+</header>
+<div id="status">Music player not connected - is OBS open with the "IXC Music Player" browser source (http://localhost:8767/music/player.html)?</div>
+<div id="tabs"><button id="tQueue" class="sel">Queue</button><button id="tResults">Results</button></div>
+<main id="list"></main>
+<script>
+const API = location.origin + '/api';
+const $ = (id) => document.getElementById(id);
+let state = {}, results = [], tab = 'queue', lastQueueJson = '';
+const thumb = (it) => it && it.id ? `https://i.ytimg.com/vi/${it.id}/mqdefault.jpg` : '';
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const send = (c) => fetch(`${API}/cmd`, { method: 'POST', body: JSON.stringify(c) }).catch(() => {});
+const isLink = (s) => /youtu\.?be|youtube\.com|[?&]list=/.test(s) || /^[\w-]{11}$/.test(s);
+
+async function search() {
+  const s = $('q').value.trim(); if (!s) return;
+  if (isLink(s)) { send({ cmd: 'add', url: s }); $('q').value = ''; setTab('queue'); return; }
+  $('list').innerHTML = '<div class="hint">Searching…</div>'; setTab('results', true);
+  try { results = await (await fetch(`${API}/search?q=${encodeURIComponent(s)}`)).json(); } catch { results = []; }
+  renderResults();
+}
+function renderResults() {
+  if (tab !== 'results') return;
+  $('list').innerHTML = results.length ? results.map((r, i) => `<div class="it"><img src="${thumb(r)}" alt=""><div class="t"><b title="${esc(r.title)}">${esc(r.title)}</b><small>${esc(r.channel)} ${r.length ? '· ' + esc(r.length) : ''}</small></div>
+      <button data-a="playnow" data-i="${i}" title="Play now">&#9654;</button><button data-a="add" data-i="${i}" title="Add to queue">+</button></div>`).join('')
+    : '<div class="hint">No results. Try other words, or paste a YouTube link / playlist link.</div>';
+}
+function renderQueue() {
+  if (tab !== 'queue') return;
+  const q = state.queue || [], j = JSON.stringify([q, state.index]); if (j === lastQueueJson) return; lastQueueJson = j;
+  $('list').innerHTML = q.length ? q.map((it, i) => `<div class="it ${i === state.index ? 'cur' : ''}" style="${it.bad ? 'opacity:.55' : ''}"><img src="${thumb(it)}" alt=""><div class="t"><b title="${esc(it.title || it.id || 'Playlist')}">${esc(it.title || (it.list ? 'YouTube playlist' : it.id))}</b><small>${it.bad ? '⚠ ' + esc(it.why || "can't play here") + ' - ▶ to retry' : (it.list ? 'playlist' : (i === state.index ? 'now playing' : '#' + (i + 1)) + (it.auto ? ' · autoplay' : ''))}</small></div>
+      <button data-a="jump" data-i="${i}" title="Play">&#9654;</button>${i > 0 ? `<button data-a="up" data-i="${i}" title="Move up">&#8593;</button>` : ''}<button data-a="remove" data-i="${i}" title="Remove">&#10005;</button></div>`).join('')
+    : '<div class="hint">Queue is empty.<br>Search above (e.g. "NCS gaming mix", "StreamBeats lofi") and press ▶ or +, or paste any YouTube video / playlist link.<br><br>Safest music for streams: NCS and StreamBeats.</div>';
+}
+function setTab(t, keep) { tab = t; $('tQueue').classList.toggle('sel', t === 'queue'); $('tResults').classList.toggle('sel', t === 'results'); lastQueueJson = ''; if (!keep) (t === 'queue' ? renderQueue : renderResults)(); }
+$('list').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; const i = +b.dataset.i, a = b.dataset.a;
+  if (a === 'playnow' || a === 'add') { const r = results[i]; send({ cmd: a, item: { id: r.id, title: r.title } }); b.textContent = '✓'; }
+  else if (a === 'up') send({ cmd: 'move', from: i, to: i - 1 }); else send({ cmd: a, i }); });
+$('go').onclick = search; $('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(); });
+$('toggle').onclick = () => send({ cmd: 'toggle' }); $('next').onclick = () => send({ cmd: 'next' }); $('prev').onclick = () => send({ cmd: 'prev' });
+$('shuf').onclick = () => send({ cmd: 'shuffle', on: !state.shuffle });
+$('rep').onclick = () => send({ cmd: 'repeat', on: !state.repeat });
+$('auto').onclick = () => send({ cmd: 'autoplay', on: state.autoplay === false });
+$('astart').onchange = () => send({ cmd: 'autostart', on: $('astart').checked });
+let volT; $('vol').oninput = () => { clearTimeout(volT); volT = setTimeout(() => send({ cmd: 'volume', v: +$('vol').value }), 120); };
+$('tQueue').onclick = () => setTab('queue'); $('tResults').onclick = () => setTab('results');
+let dragging = false; $('vol').onpointerdown = () => dragging = true; $('vol').onpointerup = () => dragging = false;
+
+async function refresh() {
+  try { state = await (await fetch(`${API}/state`, { cache: 'no-store' })).json(); } catch { state = {}; }
+  const alive = state.t && Date.now() - state.t < 6000 && state.ready; $('status').classList.toggle('show', !alive);
+  const it = (state.queue || [])[state.index];
+  $('nowT').textContent = state.title || (it && (it.title || (it.list ? 'YouTube playlist' : ''))) || 'Nothing playing';
+  $('nowS').textContent = (state.playing ? '▶ playing' : '⏸ paused') + ' · IXC Music';
+  $('nowI').src = it && it.id ? thumb(it) : ''; $('toggle').innerHTML = state.playing ? '&#9208;' : '&#9654;';
+  $('shuf').classList.toggle('on', !!state.shuffle); $('rep').classList.toggle('on', state.repeat !== false); $('auto').classList.toggle('on', state.autoplay !== false); if (document.activeElement !== $('astart')) $('astart').checked = !!state.autostart; if (!dragging && state.volume != null) $('vol').value = state.volume;
+  $('note').style.display = state.note ? 'block' : 'none'; $('note').textContent = state.note || '';
+  $('bar').firstElementChild.style.width = state.dur ? Math.min(100, 100 * state.pos / state.dur) + '%' : '0';
+  renderQueue();
+}
+setInterval(refresh, 1000); refresh(); renderQueue();
+</script>
+</body>
+</html>
