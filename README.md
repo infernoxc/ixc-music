@@ -15,6 +15,18 @@ Search YouTube or paste YouTube / Spotify links from an OBS dock, and choose wit
 
 </div>
 
+> [!IMPORTANT]
+> **IXC Music is now part of IXC 3**, together with IXC ChatBox, in **one program** that also reads chat on its own (Streamer.bot is
+> optional). New installs and updates come from **[infernoxc/ixc-chatbox](https://github.com/infernoxc/ixc-chatbox)**.
+>
+> - **New users:** download `IXC-Setup.exe` from the [IXC releases](https://github.com/infernoxc/ixc-chatbox/releases/latest).
+> - **Using IXC Music 2.x:** just run the IXC 3 setup. Your queue, settings and Spotify keys are moved over automatically, and the old
+>   phone tunnel program is removed (phones scan a new QR code once).
+> - **What IXC 3 adds to music:** local music folders, a queue that survives OBS and PC restarts, song requests from chat with limits and
+>   cooldowns, Now Playing overlays and text files, and chat-voice ducking that always restores the volume.
+>
+> This repository stays available for IXC Music 2.x. The rest of this page describes 2.x.
+
 ---
 
 <img src="docs/images/music-dock.png" alt="IXC Music dock inside OBS" align="right" width="330">
