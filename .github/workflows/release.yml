@@ -1,4 +1,7 @@
 name: Release
+# IXC Music is part of IXC 3 (Music + ChatBox in one program), which is built and tested in infernoxc/ixc-chatbox.
+# A release here (tag vX.Y.Z) attaches the same files as the ixc-chatbox release with that tag, so people who come
+# to this repository get the same installer.
 on:
   push:
     tags: ["v*.*.*"]
@@ -6,28 +9,23 @@ permissions:
   contents: write
 jobs:
   release:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-      - name: Check tag matches VERSION
-        shell: powershell
-        run: |
-          $v = (Get-Content VERSION -TotalCount 1).Trim()
-          if ("v$v" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} does not match VERSION $v" }
-      - name: Install Inno Setup
-        shell: powershell
-        run: choco install innosetup -y --no-progress
-      - name: Test + build ZIP and installer
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File build\build.ps1 -Installer
-      - name: Create GitHub Release
-        shell: powershell
+      - name: Attach the IXC 3 files from the ixc-chatbox release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $t = "${{ github.ref_name }}"; $notes = "docs\release-notes\$t.md"
-          $files = Get-ChildItem dist -File | % FullName
-          gh release view $t *> $null
-          if ($LASTEXITCODE -eq 0) { gh release upload $t $files --clobber; exit 0 }   # release already made by hand: refresh its files
-          if (Test-Path $notes) { gh release create $t $files --title "IXC Music $t" --notes-file $notes }
-          else { gh release create $t $files --title "IXC Music $t" --generate-notes }
+          t="${GITHUB_REF_NAME}"
+          # the ixc-chatbox release builds and tests its installer first (about 5 minutes): wait for it, up to 30 minutes
+          for i in $(seq 1 60); do
+            gh release download "$t" -R infernoxc/ixc-chatbox -D dist -p 'IXC-Setup-*.exe' -p 'IXC-Suite-*.zip' -p 'SHA256SUMS.txt' --clobber 2>/dev/null || true
+            if ls dist/IXC-Setup-*.exe >/dev/null 2>&1 && [ -f dist/SHA256SUMS.txt ]; then break; fi
+            echo "waiting for the $t release of infernoxc/ixc-chatbox ($i/60)"; sleep 30
+          done
+          ls dist/IXC-Setup-*.exe dist/SHA256SUMS.txt
+          (cd dist && sha256sum -c --ignore-missing SHA256SUMS.txt)   # the same files, unchanged
+          notes="docs/release-notes/$t.md"; [ -f "$notes" ] || { echo "IXC Music is part of IXC $t. Download and details: https://github.com/infernoxc/ixc-chatbox/releases/tag/$t" > /tmp/notes.md; notes=/tmp/notes.md; }
+          if gh release view "$t" >/dev/null 2>&1; then gh release upload "$t" dist/* --clobber
+          else gh release create "$t" dist/* --title "IXC $t (Music + ChatBox)" --notes-file "$notes"; fi
