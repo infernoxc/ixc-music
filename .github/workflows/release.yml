@@ -5,6 +5,12 @@ name: Release
 on:
   push:
     tags: ["v*.*.*"]
+  # "Run workflow" on the Actions page: make (or refresh) the release here for an ixc-chatbox tag, e.g. v3.0.1
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "IXC release tag, e.g. v3.0.1"
+        required: true
 permissions:
   contents: write
 jobs:
@@ -17,7 +23,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          t="${GITHUB_REF_NAME}"
+          t="${{ inputs.tag || github.ref_name }}"
           # the ixc-chatbox release builds and tests its installer first (about 5 minutes): wait for it, up to 30 minutes
           for i in $(seq 1 60); do
             gh release download "$t" -R infernoxc/ixc-chatbox -D dist -p 'IXC-Setup-*.exe' -p 'IXC-Suite-*.zip' -p 'SHA256SUMS.txt' --clobber 2>/dev/null || true
