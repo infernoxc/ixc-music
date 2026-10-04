@@ -5,11 +5,11 @@ name: Release
 on:
   push:
     tags: ["v*.*.*"]
-  # "Run workflow" on the Actions page: make (or refresh) the release here for an ixc-chatbox tag, e.g. v3.0.1
+  # "Run workflow" on the Actions page: make (or refresh) the release here for an ixc-chatbox tag, e.g. v3.0.2
   workflow_dispatch:
     inputs:
       tag:
-        description: "IXC release tag, e.g. v3.0.1"
+        description: "IXC release tag, e.g. v3.0.2"
         required: true
 permissions:
   contents: write
